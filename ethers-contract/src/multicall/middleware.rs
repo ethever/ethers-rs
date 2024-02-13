@@ -208,7 +208,7 @@ impl<M: Middleware> Multicall<M> {
                     .map_err(ContractError::from_middleware_error)?
                     .as_u64();
                 if !constants::MULTICALL_SUPPORTED_CHAIN_IDS.contains(&chain_id) {
-                    return Err(error::MulticallError::InvalidChainId(chain_id))
+                    return Err(error::MulticallError::InvalidChainId(chain_id));
                 }
                 constants::MULTICALL_ADDRESS
             }
@@ -253,7 +253,7 @@ impl<M: Middleware> Multicall<M> {
             (_, Some(chain_id)) => {
                 let chain_id = chain_id.into();
                 if !constants::MULTICALL_SUPPORTED_CHAIN_IDS.contains(&chain_id) {
-                    return Err(error::MulticallError::InvalidChainId(chain_id))
+                    return Err(error::MulticallError::InvalidChainId(chain_id));
                 }
                 constants::MULTICALL_ADDRESS
             }
@@ -341,7 +341,7 @@ impl<M: Middleware> Multicall<M> {
             TypedTransaction::DepositTransaction(tx) => (tx.tx.to, tx.tx.data, tx.tx.value),
         };
         if data.is_none() && !call.function.outputs.is_empty() {
-            return self
+            return self;
         }
         if let Some(NameOrAddress::Address(target)) = to {
             let call = Call {
@@ -663,6 +663,41 @@ impl<M: Middleware> Multicall<M> {
         }
     }
 
+    /// Query the block state but with msg.value accumulate from sub calls.
+    pub async fn call_raw_value(&self) -> Result<Vec<StdResult<Token, Bytes>>, M> {
+        // Different call result types based on version
+        match self.version {
+            // Wrap the return data with `success: true` since version 1 reverts if any call failed
+            MulticallVersion::Multicall => {
+                let call = self.as_aggregate();
+                let (_, bytes) = if let Some(state) = &self.state {
+                    ContractCall::call_raw(&call).state(state).await?
+                } else {
+                    ContractCall::call(&call).await?
+                };
+                self.parse_call_result(
+                    bytes
+                        .into_iter()
+                        .map(|return_data| MulticallResult { success: true, return_data }),
+                )
+            }
+            // Same result type (`MulticallResult`)
+            MulticallVersion::Multicall2 | MulticallVersion::Multicall3 => {
+                let call = if self.version.is_v2() {
+                    self.as_try_aggregate()
+                } else {
+                    self.as_aggregate_3_value()
+                };
+                let results = if let Some(state) = &self.state {
+                    ContractCall::call_raw(&call).state(state).await?
+                } else {
+                    ContractCall::call(&call).await?
+                };
+                self.parse_call_result(results.into_iter())
+            }
+        }
+    }
+
     /// For each call and its `return_data`: if `success` is true, parses `return_data` with the
     /// call's function outputs, otherwise returns the bytes in `Err`.
     fn parse_call_result(
@@ -679,7 +714,7 @@ impl<M: Middleware> Multicall<M> {
                 // still do so because of other calls that are in the same multicall
                 // aggregate.
                 if !success && !call.allow_failure {
-                    return Err(error::MulticallError::IllegalRevert)
+                    return Err(error::MulticallError::IllegalRevert);
                 }
 
                 Err(return_data)
